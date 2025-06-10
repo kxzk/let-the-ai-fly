@@ -11,14 +11,12 @@ use drone::{DroneConnection, TelloDrone};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // initialize drone connection
-    let drone = TelloDrone::new("192.168.10.1:8889", "0.0.0.0:9000").await?;
-    let drone = Arc::new(Mutex::new(drone));
+    let mut drone = TelloDrone::new("192.168.10.1:8889", "0.0.0.0:9000").await?;
 
     // connect to drone
-    {
-        let mut d = drone.lock().await;
-        d.connect().await?;
-    }
+    drone.connect().await?;
+
+    let drone = Arc::new(Mutex::new(drone));
 
     // create controller (easily swappable with LLMController later)
     let controller = ManualController::new();
@@ -29,10 +27,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_control_loop<C: Controller>(
-    drone: Arc<Mutex<dyn DroneConnection>>,
-    controller: C,
-) -> anyhow::Result<()> {
+async fn run_control_loop<D, C>(drone: Arc<Mutex<D>>, controller: C) -> anyhow::Result<()>
+where
+    D: DroneConnection + 'static,
+    C: Controller,
+{
     loop {
         // get control input
         if let Some(action) = controller.get_action().await? {
@@ -58,7 +57,6 @@ async fn run_control_loop<C: Controller>(
 mod drone {
     use super::*;
 
-    #[async_trait::async_trait]
     pub trait DroneConnection: Send + Sync {
         async fn connect(&mut self) -> anyhow::Result<()>;
         async fn send_command(&mut self, cmd: &str) -> anyhow::Result<()>;
@@ -140,7 +138,6 @@ mod drone {
         }
     }
 
-    #[async_trait::async_trait]
     impl DroneConnection for TelloDrone {
         async fn connect(&mut self) -> anyhow::Result<()> {
             println!(
@@ -154,7 +151,7 @@ mod drone {
                 match self.send_with_retry("command", 2).await {
                     Ok(_) => {
                         println!(
-                            "[info] connected! | t=takeoff, h=land, i/j/k/l move 20cm, esc=quit"
+                            "[info] connected! | q=takeoff, a=land, e/d/s/f move 20cm, esc=quit"
                         );
                         self.connected = true;
                         return Ok(());
@@ -208,7 +205,6 @@ mod controller {
         Exit,
     }
 
-    #[async_trait::async_trait]
     pub trait Controller: Send + Sync {
         async fn get_action(&self) -> anyhow::Result<Option<Action>>;
     }
@@ -221,18 +217,17 @@ mod controller {
         }
     }
 
-    #[async_trait::async_trait]
     impl Controller for ManualController {
         async fn get_action(&self) -> anyhow::Result<Option<Action>> {
             if poll(Duration::from_millis(200))? {
                 if let Event::Key(key) = read()? {
                     let action = match key.code {
-                        KeyCode::Char('t') => Action::Command("takeoff".to_string()),
-                        KeyCode::Char('h') => Action::Command("land".to_string()),
-                        KeyCode::Char('i') => Action::Command("forward 20".to_string()),
-                        KeyCode::Char('k') => Action::Command("back 20".to_string()),
-                        KeyCode::Char('j') => Action::Command("left 20".to_string()),
-                        KeyCode::Char('l') => Action::Command("right 20".to_string()),
+                        KeyCode::Char('q') => Action::Command("takeoff".to_string()),
+                        KeyCode::Char('a') => Action::Command("land".to_string()),
+                        KeyCode::Char('e') => Action::Command("forward 20".to_string()),
+                        KeyCode::Char('d') => Action::Command("back 20".to_string()),
+                        KeyCode::Char('s') => Action::Command("left 20".to_string()),
+                        KeyCode::Char('f') => Action::Command("right 20".to_string()),
                         KeyCode::Esc => Action::Exit,
                         _ => Action::NoOp,
                     };
@@ -252,4 +247,3 @@ mod controller {
         // - decision making logic
     }
 }
-
